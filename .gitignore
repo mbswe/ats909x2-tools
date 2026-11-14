@@ -1,0 +1,7 @@
+# Build output
+memorymanager/target/
+
+# Images read from a radio: personal data, keep them out of the repository
+*.bin
+
+.DS_Store

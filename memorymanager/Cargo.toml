@@ -1,0 +1,22 @@
+[package]
+name = "memory-manager"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "Terminal editor for the presets of a Sangean ATS-909X2, with transfer to and from the radio through an ESP32 bridge"
+license = "MIT"
+publish = false
+
+[lib]
+name = "memory_manager"
+path = "src/lib.rs"
+
+[[bin]]
+name = "memory-manager"
+path = "src/main.rs"
+
+[dependencies]
+crossterm = "0.29"
+libc = "0.2"
+ratatui = "0.30"
+serialport = { version = "4", default-features = false }
