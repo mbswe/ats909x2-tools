@@ -20,7 +20,9 @@ The experiments behind them are listed in section 8.
 > text, the radio writes the text into the buffer it is exporting from, 16
 > bytes at offset `0x40–0x4F` of a 256-byte block, and its own verification
 > then fails. Seen in two exports on 2026-11-14 (section 8). Tuning FM to an
-> empty frequency before DATA OUT should avoid it; that is untested.
+> empty frequency before DATA OUT avoids it: of 15 reads made that way on
+> 2026-11-15, 14 passed, and the one that failed stopped at block 30, not at
+> the first block.
 
 Several inferred entries lean on the EEPROM layout of the older ATS-909X as
 reconstructed by the ATS 909 Hoggy project (section 9). The X2 uses other
@@ -59,7 +61,7 @@ the other bands store their frequencies as one plain list.
 | Offset | Size | Contents | Status |
 |---|---|---|---|
 | `0x0000–0x017F` | 36 names | FM preset names | Confirmed |
-| `0x0180–0x01DF` | 9 names | Blank name fields with no known use | Unknown |
+| `0x0180–0x01DF` | 9 names | Blank name fields with no known use. After a memory reset, `0x01A0–0x01AF` in bank A read `FF` | Unknown |
 | `0x01E0–0x02FF` | 27 names | MW preset names | Confirmed |
 | `0x0300–0x051F` | 51 names | SW page names, pages 1–49; the last two fields are unused | Confirmed |
 | `0x0520–0x057F` | 9 names | LW preset names | Confirmed |
@@ -76,6 +78,21 @@ the other bands store their frequencies as one plain list.
 | `0x0E60–0x0EB9` | 45 words | AIR frequencies | Confirmed |
 | `0x0EBA–0x0EFF` | 70 bytes | Zero | Unknown |
 | `0x0F00–0x0FFF` | 256 bytes | Bank A: settings, timers and a product string (section 6). Bank B: all `FF`. Bank C: not exported | Partly confirmed |
+
+### After a factory reset and a memory reset
+
+Read on 2026-11-15, right after both resets:
+
+- **All three banks are identical**, except 16 bytes at `0x01A0–0x01AF` in
+  bank A, in the unused name fields, which read `FF`.
+- **FM, MW, LW and AIR** hold only the two factory presets of section 3.
+- **SW** holds 185 presets on its 49 pages, and the factory page names: `DW`,
+  `SWF_3`, `BR`, `DLF` and so on, ending with `PAGE 40` to `PAGE 49`.
+- **All names** of FM, MW, LW and AIR presets are ten `0x20`; all mode bytes
+  are `00`; no preset is locked.
+- **Settings** as listed in section 6: `0x0F07–0x0F09` = `04 01 04`, cities
+  `0x15` and `0x08`, the three timers and the priority station at 100.00 MHz,
+  switched off, at 00:00.
 
 ## 3. Frequencies
 
@@ -216,14 +233,14 @@ of the ATS-909X layout, moved from `0x08A0` to `0x0F00`.
 |---|---:|---|---|---|
 | `0x0F00` | 7 | Unknown there as well | Zero | Unknown |
 | `0x0F07` | 1 | Unknown | `04` in every export | Unknown |
-| `0x0F08` | 2 | Menu settings, as bits; see below | `21 04` with the defaults | Partly confirmed |
+| `0x0F08` | 2 | Menu settings, as bits; see below | `01 04` after a factory reset | Confirmed |
 | `0x0F0A` | 6 | Unknown | Zero | Unknown |
 | `0x0F10` | 15 | Name of the user-defined city | Blank | Inferred |
 | `0x0F1F` | 1 | Flags; bit 4 = show world time | `00` | Inferred |
 | `0x0F20` | 16 | Padding | 16 blanks | Inferred |
 | `0x0F30` | 6 | Times of the three timers, 2 bytes each: minutes, then hours, binary-coded decimal | Timer 1 at 12:34 is `34 12` | Confirmed for timer 1 |
 | `0x0F36` | 1 | World-time city, as an index into a city list | `0x15` = 21, a valid index in the ATS-909X list of 43 cities | Inferred |
-| `0x0F37` | 1 | Local-time city | Also a valid index in that list | Inferred |
+| `0x0F37` | 1 | Local-time city | `0x08` after a factory reset, Berlin in the ATS-909X list | Inferred |
 | `0x0F38` | 1 | Length of the user-defined city name | `00` | Inferred |
 | `0x0F39` | 1 | Time zone of the user-defined city, in half hours | `00` | Inferred |
 | `0x0F3A` | 6 | Daylight-saving flags, one bit per city | Zero | Inferred |
@@ -238,35 +255,37 @@ on, radio, band 1. Switched off it was `01`. This matches the ATS-909X, where
 the band codes are 0 LW, 1 FM, 2 MW, 3 SW. **Confirmed for FM.** The X2 also
 has AIR, so its other band codes may differ.
 
-**Menu settings.** Four exports with different settings:
+**Menu settings.** On 2026-11-15, after a factory reset, one menu setting was
+changed per read. Each change moved only the bits of that setting:
 
-| Export | Backlight | FM step | Beep | `0x0F08` | `0x0F09` |
-|---|---|---|---|---|---|
-| 2026-11-13 | 20 s | 100 kHz | off | `0010 0001` | `0000 0100` |
-| 2026-11-14, first | 10 s | 50 kHz | on | `0000 0001` | `0001 0001` |
-| then beep changed | 10 s | 50 kHz | off | `0010 0001` | `0001 0000` |
-| then FM step changed | 10 s | 100 kHz | off | `0010 0001` | `0000 0000` |
-
-| Setting | Where | Values | Status |
+| Setting | Where | Values | Factory value |
 |---|---|---|---|
-| FM step | `0x0F09` bit 4 | 1 = 50 kHz, 0 = 100 kHz. 200 kHz is probably bit 5 | Confirmed for 50 and 100 kHz: the only bit that changed when only the FM step changed |
-| Backlight | `0x0F09` bit 2 | 1 = 20 s, 0 = 10 s. 30 s is probably bit 3 | Inferred: the only bit left over when backlight, FM step and beep changed together |
-| Beep | `0x0F09` bit 0 (1 = on) or `0x0F08` bit 5 (0 = on) | | Both bits flipped every time the beep setting changed, and at no other time. Either the radio keeps the setting twice, or one of them is another setting that changed at the same moments, such as the selected memory bank |
+| Memory bank | `0x0F09` bits 0–1 | `00` A, `01` B, `10` C | A |
+| Backlight | `0x0F09` bits 2–3 | `00` 10 s, `01` 20 s, `10` 30 s | 20 s |
+| FM step | `0x0F09` bits 4–5 | `00` 100 kHz, `01` 50 kHz, `10` 200 kHz | 100 kHz |
+| FM stereo | `0x0F09` bit 6 | 0 auto, 1 mono | auto |
+| Soft mute | `0x0F09` bit 7 | 0 off, 1 on | off |
+| Scan delay | `0x0F08` bits 0–1 | `00` 0.5 s, `01` 1.0 s, `11` 2.0 s; `10` is presumably 1.5 s | 1.0 s |
+| SSB step | `0x0F08` bit 4 | 0 20 Hz, 1 10 Hz | 20 Hz |
+| Beep | `0x0F08` bit 5 | 0 on, 1 off | on |
+
+All confirmed, apart from scan delay 1.5 s. The 50 kHz FM step comes from the
+reads of 2026-11-14. Those reads fit this table too: what looked like a second
+beep bit was the memory bank, set to B for the first of them.
+
+Bits 2, 3, 6 and 7 of `0x0F08` were 0 in every export.
 
 **The clock** is probably not in the exported range: no byte has followed the
 time of day across exports made hours and days apart.
 
-Not located yet: clock format, FM stereo, soft mute, the selected memory bank,
-FM range, SSB step and scan delay (manual, pages 14–15). The unknown bits of
-`0x0F07–0x0F09` and the zero bytes from `0x0F60` are the candidates.
+Not located yet: clock source (RDS CT) and format, and FM range (manual,
+pages 14–15). The unused bits of `0x0F08`, the byte at `0x0F07` and the zero
+bytes from `0x0F60` are the candidates.
 
 ## 7. Open questions
 
-- **Beep, or something else?** Which of `0x0F09` bit 0 and `0x0F08` bit 5
-  is the beep setting, and what the other one is.
-- **The other menu settings**, including 30 s backlight and 200 kHz FM step.
-- **RDS radio text in exports.** Does tuning FM to an empty frequency before
-  DATA OUT prevent it?
+- **Clock source and format, and FM range.** Where they are stored.
+- **The 16 `FF` bytes** at `0x01A0` in bank A after a memory reset.
 - **Mode bytes on LW**, and confirmation that FM and AIR have none.
 - **The SSB fine-tune value.** What do the low bits of the mode byte mean on
   the X2?
@@ -334,29 +353,52 @@ followed by carriage returns (`0x0D`), in the RDS character set (`0x91` is
 blocks. The radio's memory itself was not affected. The settings bytes lie
 outside the damaged ranges.
 
+### Menu settings, 2026-11-15 (done)
+
+After a factory reset and a memory reset, 14 reads with FM tuned to an empty
+frequency. The first two, without any change, were identical. Each of the
+others changed one menu setting, and exactly one byte of the image changed:
+
+| Read | Change | Byte | Before → after |
+|---|---|---|---|
+| 03 | Memory bank B | `0x0F09` | `0000 0100` → `0000 0101` |
+| 04 | Memory bank C | `0x0F09` | `0000 0101` → `0000 0110` |
+| 05 | Memory bank A | `0x0F09` | `0000 0110` → `0000 0100` |
+| 06 | Backlight 10 s | `0x0F09` | `0000 0100` → `0000 0000` |
+| 07 | Backlight 30 s | `0x0F09` | `0000 0000` → `0000 1000` |
+| 08 | FM step 200 kHz | `0x0F09` | `0000 1000` → `0010 1000` |
+| 09 | Beep off | `0x0F08` | `0000 0001` → `0010 0001` |
+| 10 | FM mono | `0x0F09` | `0010 1000` → `0110 1000` |
+| 11 | Soft mute on | `0x0F09` | `0110 1000` → `1110 1000` |
+| 12 | SSB step 10 Hz | `0x0F08` | `0010 0001` → `0011 0001` |
+| 13 | Scan delay 0.5 s | `0x0F08` | `0011 0001` → `0011 0000` |
+| 14 | Scan delay 2.0 s | `0x0F08` | `0011 0000` → `0011 0011` |
+
 ### Still to do
 
 Tune FM to an empty frequency before each DATA OUT.
 
 | Change on the radio | What it shows |
 |---|---|
-| Nothing but tuning FM to an empty frequency | Whether that keeps RDS text out of the export, so VERIFY passes |
-| Switch MEMOBANK only | Whether `0x0F08` bit 5 or `0x0F09` bit 0 is the selected bank |
-| Backlight 30 s; FM step 200 kHz | The remaining values of those two settings |
-| Change one other menu setting per read | Where the other settings are |
+| Clock format 12H; clock source RDS CT; another FM range | Where those settings are |
+| Home city, world-time city, daylight saving, a user-defined city | Whether the city fields of section 6 are right |
+| Timer 1 off; timer 2 on the buzzer; timer 3 on SW, AIR and LW stations | Timer flags and band codes |
 | Store an LW preset in LSB | Where LW keeps its mode bytes, and the LSB value |
 | Fine-tune an SSB preset and store it | The meaning of the low bits of the mode byte |
-| Set timer 2 to the buzzer, and timer 3 to an SW or AIR station | Timer band codes and the buzzer flag |
-| Set a priority station | Whether the priority field is right |
-| Store a frequency that is already on another page | Whether the move rule works across pages |
+| Lock an MW and an LW preset | The lock bit on those bands |
+| Type a name for an AIR preset | Typed names on AIR |
 | Store a preset in MEMOBANK C | Confirms bank C with an export |
+| Store a frequency that is already on another page | Whether the move rule works across pages |
+| Tune each band to an unusual frequency without storing it | Whether the last frequency per band is stored |
+| Select an SW meter band; change the bandwidth, squelch or display brightness | Whether those are stored |
 
 ## 9. Sources
 
 - Exports of one ATS-909X2: two made on 2026-11-12, before and after changing
   a single SW preset from 9765 to 9999 kHz; two made on 2026-11-13, before and
-  after storing the marker presets; one made on 2026-11-14 after the changes
-  listed in section 8. The exports themselves are not published.
+  after storing the marker presets; several made on 2026-11-14 and 15 more on
+  2026-11-15, after the changes listed in section 8. The exports themselves
+  are not published.
 - ATS 909 Hoggy project, `EEPROM.h` by Siarzhuk Zharski (MIT licence): the
   EEPROM structures of the ATS-909 and ATS-909X. Source tree:
   <https://sourceforge.net/p/ats909hoggy/ats909hoggy/ci/default/tree/>. The
