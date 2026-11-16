@@ -17,6 +17,7 @@ use crate::browser::{Browser, EntryKind, format_size};
 use std::time::Instant;
 
 use memory_manager::radio::protocol::{BLOCK_COUNT, Direction, IN_TOTAL_BYTES, PACKET_COUNT};
+use memory_manager::settings::{Setting, TIMERS};
 
 use crate::app::{
     AfterDiscard, App, Confirm, DialogFocus, Document, Focus, LineInput, Mode, Outcome, Prompt, PromptKind,
@@ -59,6 +60,11 @@ pub fn draw(frame: &mut Frame, app: &App) {
         Mode::Browse(browser) => draw_file_dialog(frame, browser, None),
         Mode::Save(dialog) => draw_file_dialog(frame, &dialog.browser, Some(dialog)),
         Mode::Radio(transfer) => draw_radio(frame, transfer, app.log_path.as_deref()),
+        Mode::Settings(selected) => {
+            if let Some(doc) = &app.doc {
+                draw_settings(frame, doc, *selected);
+            }
+        }
         Mode::Confirm(Confirm::WriteRadio { file, reference, diff, has_backup }) => {
             draw_write_confirm(frame, file, reference, diff, *has_backup)
         }
@@ -349,7 +355,9 @@ fn draw_keys(frame: &mut Frame, area: Rect, app: &App) {
     let sw = app.band == Band::Sw;
     let pairs: Vec<(&str, &str)> = match (&app.mode, &app.doc, app.focus) {
         (Mode::Prompt(_), _, _) => vec![("Enter", "apply"), ("Esc", "cancel"), ("Ctrl+U", "clear")],
-        (Mode::Confirm(_) | Mode::Browse(_) | Mode::Save(_) | Mode::Radio(_) | Mode::Help, _, _) => vec![],
+        (Mode::Confirm(_) | Mode::Browse(_) | Mode::Save(_) | Mode::Radio(_) | Mode::Settings(_) | Mode::Help, _, _) => {
+            vec![]
+        }
         (Mode::Normal, None, _) => {
             vec![("n", "new"), ("o", "open"), ("R", "read radio"), ("?", "help"), ("q", "quit")]
         }
@@ -359,6 +367,7 @@ fn draw_keys(frame: &mut Frame, area: Rect, app: &App) {
             ("Tab", "bank"),
             ("b", "band"),
             if sw { ("Enter/r", "rename") } else { ("Enter", "open") },
+            ("m", "settings"),
             ("u", "revert"),
             ("s", "save"),
             ("S", "save as"),
@@ -687,6 +696,10 @@ fn draw_write_confirm(
         }
         lines.push(Line::from(format!("  {}", examples.join(", ")).dim()));
     }
+    if has_backup && !diff.settings.is_empty() {
+        let names: Vec<&str> = diff.settings.iter().map(|setting| setting.label()).collect();
+        lines.push(Line::from(format!("  Settings that differ: {}.", names.join(", "))));
+    }
     if diff.other_bytes > 0 {
         lines.push(Line::from(Span::styled(
             format!(
@@ -861,9 +874,10 @@ fn draw_radio(frame: &mut Frame, transfer: &Transfer, log_path: Option<&std::pat
             } else {
                 lines.push(Line::from(Span::styled(
                     format!(
-                        "✗ The radio differs from the written image: {} slots, {} names, {} other bytes.",
+                        "✗ The radio differs from the written image: {} slots, {} names, {} settings, {} other bytes.",
                         diff.presets.len(),
                         diff.names.len(),
+                        diff.settings.len(),
                         diff.other_bytes
                     ),
                     Style::new().fg(ERROR).bold(),
@@ -898,6 +912,65 @@ fn draw_radio(frame: &mut Frame, transfer: &Transfer, log_path: Option<&std::pat
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }).block(block), area);
 }
 
+/// The menu settings, editable, and the timers, shown only.
+fn draw_settings(frame: &mut Frame, doc: &Document, selected: usize) {
+    let image = &doc.image;
+    let mut lines = vec![Line::from(vec![
+        Span::styled(format!("  {:<13}{:<18}{:<12}{}", "Setting", "Value", "Factory", "Where"), Style::new().bold().dim()),
+    ])];
+    for (index, setting) in Setting::ALL.into_iter().enumerate() {
+        let modified = image.is_setting_modified(setting);
+        let mut spans = vec![
+            Span::styled(if modified { "●" } else { " " }, Style::new().fg(MODIFIED)),
+            Span::raw(if index == selected { "▶" } else { " " }),
+            Span::raw(format!("{:<13}", setting.label())),
+            Span::raw(format!("{:<18}", setting.text(image.setting(setting)))),
+            Span::styled(format!("{:<12}", setting.text(setting.factory())), Style::new().dim()),
+            Span::styled(setting.location(), Style::new().dim()),
+        ];
+        if modified {
+            spans.push(Span::styled(
+                format!("  was {}", setting.text(image.saved_setting(setting))),
+                Style::new().fg(MODIFIED),
+            ));
+        }
+        let line = Line::from(spans);
+        lines.push(if index == selected { line.style(selection_style(true)) } else { line });
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled("  Timers (shown only)", Style::new().bold())));
+    for number in 1..=TIMERS {
+        let timer = image.timer(number);
+        lines.push(Line::from(format!(
+            "  {number}  {}  {:<12}{}",
+            timer.time_text(),
+            timer.state_text(),
+            timer.station_text()
+        )));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(
+        "  Writing changed settings to the radio has not been tested yet.".dim(),
+    ));
+    lines.push(Line::from(vec![
+        Span::styled("  ↑↓", Style::new().fg(ACCENT).bold()),
+        Span::raw(" choose   "),
+        Span::styled("←→", Style::new().fg(ACCENT).bold()),
+        Span::raw(" change   "),
+        Span::styled("u", Style::new().fg(ACCENT).bold()),
+        Span::raw(" revert   "),
+        Span::styled("Esc", Style::new().fg(ACCENT).bold()),
+        Span::raw(" close"),
+    ]));
+    let area = centered(frame.area(), 84, lines.len() as u16 + 2);
+    frame.render_widget(Clear, area);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(ACCENT))
+        .title(" Menu settings · MemoBank A, 0x0F08–0x0F09 ".bold());
+    frame.render_widget(Paragraph::new(lines).block(block), area);
+}
+
 fn draw_help(frame: &mut Frame) {
     let rows: &[(&str, &str)] = &[
         ("Tab / Shift+Tab", "next / previous MemoBank"),
@@ -910,6 +983,7 @@ fn draw_help(frame: &mut Frame) {
         ("0–9", "in slots: start typing a new frequency"),
         ("r", "rename the SW page; on other bands, name the preset"),
         ("L", "lock or unlock the selected preset"),
+        ("m", "menu settings and timers"),
         ("x / Del / Backspace", "clear the selected slot"),
         ("u", "revert the selected field to its saved bytes"),
         ("n", "new image (all presets and names cleared, on every band)"),
@@ -1073,6 +1147,37 @@ mod tests {
         assert!(screen.contains("Flags"), "{screen}");
         assert!(screen.contains("522 kHz  999         USB"), "{screen}");
         assert!(screen.contains("mode USB D8 @ 0x0803"), "{screen}");
+    }
+
+    #[test]
+    fn the_settings_screen_shows_settings_and_timers() {
+        let mut app = app_with_original();
+        press(&mut app, KeyCode::Char('m'));
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Right);
+        let screen = render(&app, 120, 40);
+        assert!(screen.contains("Menu settings · MemoBank A, 0x0F08–0x0F09"), "{screen}");
+        assert!(screen.contains("Backlight    30 s"), "{screen}");
+        assert!(screen.contains("0x0F09 bits 2–3  was 20 s"), "{screen}");
+        assert!(screen.contains("Beep         off"), "{screen}");
+        assert!(screen.contains("Timers (shown only)"), "{screen}");
+        assert!(screen.contains("1  00:00  off, buzzer FM 100.00 MHz"), "{screen}");
+        assert!(screen.contains("has not been tested yet"), "{screen}");
+        for (w, h) in [(60, 20), (40, 10), (20, 5)] {
+            render(&app, w, h);
+        }
+
+        // A write lists changed settings when there is a backup to compare with.
+        press(&mut app, KeyCode::Esc);
+        let original = EepromImage::load(&fixture("original-data-out.bin")).unwrap();
+        app.radio_backup = Some(RadioBackup { image: original, taken: "12:00".into() });
+        let dir = TempDir::new("render-settings");
+        let path = dir.0.join("set.bin");
+        app.doc.as_mut().unwrap().image.save(&path).unwrap();
+        app.doc.as_mut().unwrap().path = Some(resolved(path));
+        press(&mut app, KeyCode::Char('W'));
+        let screen = render(&app, 100, 30);
+        assert!(screen.contains("Settings that differ: Backlight."), "{screen}");
     }
 
     #[test]

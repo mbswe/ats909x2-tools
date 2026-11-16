@@ -28,7 +28,9 @@ experimental.
 | Writing the radio (DATA IN) | Has worked, but has been tested far less than reading |
 | Editing SW frequencies | A changed preset has been written to the radio and read back correctly |
 | Editing names, locks, and presets on FM, MW, LW and AIR | The layout is confirmed by reading the radio. Writing such edits back has not been tested yet |
-| Radio settings (clock, timers, menu) | Not editable; passed through unchanged |
+| Menu settings: memory bank, backlight, FM step, FM stereo, soft mute, scan delay, SSB step, beep | Editable with `m`. Writing changed settings to the radio has not been tested yet |
+| Alarm timers | Shown with `m`, not editable |
+| Clock, cities and other settings | Not editable; passed through unchanged |
 | Platforms | Developed and used on macOS. Linux has not been tried, nor has Windows |
 
 ## Read this before you write to your radio
@@ -130,6 +132,7 @@ busy.
 | `Enter` or a digit | edit the frequency |
 | `r` | name: the page on SW, the selected preset on the other bands |
 | `L` | lock or unlock the selected preset |
+| `m` | menu settings (editable) and alarm timers (shown) |
 | `x` | clear the preset |
 | `u` | put back the saved value |
 | `s` / `S` | save / save as |

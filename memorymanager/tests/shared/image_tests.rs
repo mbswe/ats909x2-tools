@@ -655,3 +655,63 @@ fn mw_presets_have_mode_bytes_at_0x0800() {
     image.revert_preset(mw(1, 4));
     assert_eq!((image.frequency(mw(1, 4)), image.mode(mw(1, 4))), (Some(522), Some(0xD8)));
 }
+
+#[test]
+fn menu_settings_read_change_and_compare() {
+    use memory_manager::settings::Setting;
+    let original = EepromImage::load(&original_path()).unwrap();
+    let mut image = original.clone();
+    let text = |image: &EepromImage, s: Setting| s.text(image.setting(s));
+    // Every image so far had memory bank A, FM step 100 kHz, auto stereo,
+    // soft mute off, scan delay 1.0 s and SSB step 20 Hz.
+    for (setting, value) in [
+        (Setting::MemoryBank, "A"),
+        (Setting::FmStep, "100 kHz"),
+        (Setting::FmStereo, "auto"),
+        (Setting::SoftMute, "off"),
+        (Setting::ScanDelay, "1.0 s"),
+        (Setting::SsbStep, "20 Hz"),
+    ] {
+        assert_eq!(text(&image, setting), value, "{setting:?}");
+    }
+
+    // Changing one setting moves only its bits.
+    let before = image.as_bytes()[0x0F09];
+    image.set_setting(Setting::Backlight, 2).unwrap();
+    assert_eq!(text(&image, Setting::Backlight), "30 s");
+    assert_eq!(image.as_bytes()[0x0F09] & !0b1100, before & !0b1100);
+    image.set_setting(Setting::SoftMute, 1).unwrap();
+    assert!(image.is_setting_modified(Setting::SoftMute));
+    assert_eq!(
+        image.set_setting(Setting::ScanDelay, 2),
+        Err(EditError::UnknownSettingValue(Setting::ScanDelay)),
+        "1.5 s has not been confirmed"
+    );
+
+    // A write confirmation lists them as settings, not as unknown bytes.
+    let diff = image.compare(&original);
+    assert_eq!(diff.settings, vec![Setting::Backlight, Setting::SoftMute]);
+    assert_eq!(diff.other_bytes, 0);
+    assert!(diff.presets.is_empty() && diff.names.is_empty());
+
+    // A bit no setting uses still counts as unknown.
+    let mut bytes = original.as_bytes().to_vec();
+    bytes[0x0F08] ^= 0b0100_0000;
+    let odd = EepromImage::from_bytes(&bytes).unwrap();
+    let diff = odd.compare(&original);
+    assert!(diff.settings.is_empty());
+    assert_eq!(diff.other_bytes, 1);
+
+    // Reverting puts back only that setting's bits; New keeps the settings.
+    image.revert_setting(Setting::Backlight);
+    assert!(!image.is_setting_modified(Setting::Backlight));
+    assert!(image.is_setting_modified(Setting::SoftMute));
+    assert_eq!(image.cleared().setting(Setting::SoftMute), 1);
+
+    // The timers as stored: all off at 00:00, FM 100.00 MHz.
+    for number in 1..=3 {
+        let timer = original.timer(number);
+        assert_eq!((timer.time_text(), timer.state_text()), ("00:00".to_owned(), "off, buzzer".to_owned()));
+        assert_eq!(timer.station_text(), "FM 100.00 MHz");
+    }
+}

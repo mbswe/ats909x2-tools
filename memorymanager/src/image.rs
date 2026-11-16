@@ -22,6 +22,8 @@ use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
+use crate::settings::{SETTINGS_BITS, Setting, Timer};
+
 /// Exact length of a supported image: EEPROM offsets `0x0000–0x2EFF`.
 pub const IMAGE_LEN: usize = 0x2F00;
 /// Shortwave memory pages per region.
@@ -481,6 +483,8 @@ pub enum EditError {
     OffStep(Band),
     /// The preset holds no frequency, so it cannot be locked.
     EmptyPreset,
+    /// A code that has not been confirmed for this setting.
+    UnknownSettingValue(Setting),
 }
 
 impl fmt::Display for EditError {
@@ -522,6 +526,9 @@ impl fmt::Display for EditError {
                 band.step_khz()
             ),
             EditError::EmptyPreset => f.write_str("an empty position cannot be locked"),
+            EditError::UnknownSettingValue(setting) => {
+                write!(f, "that value has not been confirmed for {}", setting.label())
+            }
         }
     }
 }
@@ -660,14 +667,16 @@ pub struct ImageDiff {
     pub presets: Vec<PresetRef>,
     /// SW page names and preset names whose ten bytes differ.
     pub names: Vec<NameRef>,
-    /// Differing bytes outside the preset and name fields. The editor never
-    /// changes these, so a non-zero count means another source.
+    /// Menu settings whose value differs.
+    pub settings: Vec<Setting>,
+    /// Differing bytes outside the preset, name and settings fields. The
+    /// editor never changes these, so a non-zero count means another source.
     pub other_bytes: usize,
 }
 
 impl ImageDiff {
     pub fn is_empty(&self) -> bool {
-        self.presets.is_empty() && self.names.is_empty() && self.other_bytes == 0
+        self.presets.is_empty() && self.names.is_empty() && self.settings.is_empty() && self.other_bytes == 0
     }
 }
 
@@ -991,10 +1000,59 @@ impl EepromImage {
                 diff.names.push(name);
             }
         }
-        diff.other_bytes = (0..IMAGE_LEN)
+        diff.settings = Setting::ALL
+            .into_iter()
+            .filter(|&setting| self.setting(setting) != other.setting(setting))
+            .collect();
+        // A settings byte counts as an unknown difference only when bits
+        // outside the decoded settings differ.
+        for (at, bits) in SETTINGS_BITS {
+            known[at] = true;
+            if (self.bytes[at] ^ other.bytes[at]) & !bits != 0 {
+                diff.other_bytes += 1;
+            }
+        }
+        diff.other_bytes += (0..IMAGE_LEN)
             .filter(|&at| !known[at] && self.bytes[at] != other.bytes[at])
             .count();
         diff
+    }
+
+    // ---- Menu settings and timers ----
+
+    /// A menu setting's code, for example 1 for a 20 s backlight.
+    pub fn setting(&self, setting: Setting) -> u8 {
+        (self.bytes[setting.address()] & setting.mask()) >> setting.shift()
+    }
+
+    /// The setting's code as last loaded or saved.
+    pub fn saved_setting(&self, setting: Setting) -> u8 {
+        (self.saved[setting.address()] & setting.mask()) >> setting.shift()
+    }
+
+    /// Changes a setting to a confirmed value. The other bits of its byte stay.
+    pub fn set_setting(&mut self, setting: Setting, code: u8) -> Result<(), EditError> {
+        if !setting.values().iter().any(|(known, _)| *known == code) {
+            return Err(EditError::UnknownSettingValue(setting));
+        }
+        let at = setting.address();
+        self.bytes[at] = (self.bytes[at] & !setting.mask()) | (code << setting.shift());
+        Ok(())
+    }
+
+    pub fn is_setting_modified(&self, setting: Setting) -> bool {
+        self.setting(setting) != self.saved_setting(setting)
+    }
+
+    /// Restores a setting's bits as last loaded or saved.
+    pub fn revert_setting(&mut self, setting: Setting) {
+        let at = setting.address();
+        self.bytes[at] = (self.bytes[at] & !setting.mask()) | (self.saved[at] & setting.mask());
+    }
+
+    /// Alarm timer 1–3.
+    pub fn timer(&self, number: u8) -> Timer {
+        Timer::decode(&self.bytes[..], number)
     }
 
     /// Writes the image to `path` atomically, verifies it by reading it back,

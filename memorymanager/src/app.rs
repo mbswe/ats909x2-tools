@@ -15,6 +15,7 @@ use memory_manager::image::{
     SW_MIN_KHZ, Slot, is_name_char, name_text, parse_frequency,
 };
 use memory_manager::radio::protocol::{BLOCK_COUNT, Direction, Stats};
+use memory_manager::settings::Setting;
 use memory_manager::radio::worker::{RadioEvent, RadioRequest, Stage};
 
 use crate::browser::{Browser, EntryKind};
@@ -51,6 +52,8 @@ pub enum Mode {
     Save(SaveDialog),
     /// A transfer to or from the radio through the ESP32 bridge.
     Radio(Transfer),
+    /// The menu settings and timers, with the selected setting.
+    Settings(usize),
     Help,
 }
 
@@ -303,6 +306,7 @@ impl App {
             Mode::Browse(browser) => self.on_browse_key(browser, key),
             Mode::Save(dialog) => self.on_save_key(dialog, key),
             Mode::Radio(transfer) => self.on_radio_key(transfer, key),
+            Mode::Settings(selected) => self.on_settings_key(selected, key),
             Mode::Help => Mode::Normal,
         };
     }
@@ -331,6 +335,7 @@ impl App {
             KeyCode::Char('b') => self.step_band(1),
             KeyCode::Char('B') => self.step_band(-1),
             KeyCode::Char('L') => self.toggle_lock(),
+            KeyCode::Char('m') => return Mode::Settings(0),
             KeyCode::Left | KeyCode::Char('h') => self.focus = Focus::Pages,
             KeyCode::Right | KeyCode::Char('l') => self.focus = Focus::Slots,
             KeyCode::Up | KeyCode::Char('k') => self.step_focused(-1),
@@ -359,6 +364,37 @@ impl App {
             _ => {}
         }
         Mode::Normal
+    }
+
+    /// The settings screen: ↑↓ choose a setting, ←→ change its value.
+    fn on_settings_key(&mut self, selected: usize, key: KeyEvent) -> Mode {
+        let count = Setting::ALL.len();
+        let setting = Setting::ALL[selected];
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q' | 'm') => return Mode::Normal,
+            KeyCode::Up | KeyCode::Char('k') => return Mode::Settings((selected + count - 1) % count),
+            KeyCode::Down | KeyCode::Char('j') => return Mode::Settings((selected + 1) % count),
+            KeyCode::Right | KeyCode::Left | KeyCode::Enter | KeyCode::Char(' ' | 'l' | 'h') => {
+                let forward = !matches!(key.code, KeyCode::Left | KeyCode::Char('h'));
+                let Some(doc) = self.doc.as_mut() else { return Mode::Normal };
+                let before = doc.image.setting(setting);
+                let after = setting.step(before, forward);
+                doc.image.set_setting(setting, after).expect("steps only to confirmed values");
+                self.info(format!("{}: {} → {}", setting.label(), setting.text(before), setting.text(after)));
+            }
+            KeyCode::Char('u') => {
+                let Some(doc) = self.doc.as_mut() else { return Mode::Normal };
+                if doc.image.is_setting_modified(setting) {
+                    doc.image.revert_setting(setting);
+                    let value = setting.text(doc.image.setting(setting));
+                    self.info(format!("{} reverted to {value}.", setting.label()));
+                } else {
+                    self.info("Nothing to revert here.");
+                }
+            }
+            _ => {}
+        }
+        Mode::Settings(selected)
     }
 
     fn on_prompt_key(&mut self, mut prompt: Prompt, key: KeyEvent) -> Mode {
@@ -1391,6 +1427,33 @@ pub(crate) mod tests {
 
     fn fm(page: u8, slot: u8) -> PresetRef {
         PresetRef::new(Region::BankA, Band::Fm, Page::new(page).unwrap(), Slot::new(slot).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn m_opens_the_settings_and_arrows_change_them() {
+        let mut app = app_with_original();
+        press(&mut app, KeyCode::Char('m'));
+        assert!(matches!(app.mode, Mode::Settings(0)));
+        press(&mut app, KeyCode::Down); // backlight
+        press(&mut app, KeyCode::Right);
+        assert_eq!(status(&app), "Backlight: 20 s → 30 s");
+        assert_eq!(image(&app).setting(Setting::Backlight), 2);
+        assert_eq!(image(&app).modified_byte_count(), 1);
+        press(&mut app, KeyCode::Left);
+        press(&mut app, KeyCode::Left);
+        assert_eq!(status(&app), "Backlight: 20 s → 10 s");
+        press(&mut app, KeyCode::Char('u'));
+        assert_eq!(status(&app), "Backlight reverted to 20 s.");
+        assert!(!image(&app).is_modified());
+        // ↑ from the first setting wraps to the last.
+        press(&mut app, KeyCode::Up);
+        press(&mut app, KeyCode::Up);
+        assert!(matches!(app.mode, Mode::Settings(7)));
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(status(&app), "Beep: off → on");
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Normal));
+        assert!(app.is_dirty());
     }
 
     #[test]
